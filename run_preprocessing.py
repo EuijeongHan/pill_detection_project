@@ -7,8 +7,9 @@ HealthEat 데이터 전처리 파이프라인 전체 실행 스크립트
     python run_preprocessing.py
 
 파이프라인 순서:
-    [Step 1] Stratified Split       → train_raw.json / val.json
-    [Step 2] Copy-Paste 증강        → train_augmented_final.json
+    [Step 1]   Stratified Split       → train_raw.json / val.json
+    [Step 1-B] 소수 클래스 스티커 추출 → crops_minority/ + crop_meta.csv
+    [Step 2]   Copy-Paste 증강        → train_augmented_final.json
     [Step 3] Letterbox 800×800 변환 → train_letterbox.json / val_letterbox.json
                                       letterbox_images/train, val/
     [Step 4] CLAHE 대비 강화        → letterbox_images/ in-place 덮어쓰기
@@ -44,7 +45,7 @@ from collections import defaultdict
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.preprocessing.augmentation     import run_copy_paste
+from src.preprocessing.augmentation     import extract_minority_crops, run_copy_paste
 from src.preprocessing.transforms       import run_letterbox_pipeline, apply_clahe_to_folder
 from src.preprocessing.format_converter import run_yolo_conversion
 
@@ -156,6 +157,9 @@ def main():
 
     # ── Step 1. Stratified Split
     run_stratified_split(base_dir=BASE_DIR)
+
+    # ── Step 1-B. 소수 클래스 스티커 추출 (crop_meta.csv 생성)
+    extract_minority_crops(base_dir=BASE_DIR, threshold=50)
 
     # ── Step 2. Copy-Paste 증강 (소수 클래스 보강)
     print(f"\n{'='*60}")
