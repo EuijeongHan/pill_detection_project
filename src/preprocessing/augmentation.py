@@ -2,9 +2,15 @@
 augmentation.py
 ===============
 Copy-Paste 증강 엔진
-  - check_overlap  : AABB 충돌 감지 (새 박스가 기존 박스와 겹치는지 검사)
-  - blend_image    : 스티커-배경 경계선 자연스럽게 블렌딩
-  - run_copy_paste : 전체 증강 파이프라인 실행 (JSON + 이미지 동시 생성)
+
+  - check_overlap          : AABB 충돌 감지 (새 박스가 기존 박스와 겹치는지 검사)
+  - blend_image            : 스티커-배경 경계선 자연스럽게 블렌딩
+  - extract_minority_crops : 소수 클래스 알약 스티커(Crop) 추출 + crop_meta.csv 생성
+  - run_copy_paste         : 전체 증강 파이프라인 실행 (JSON + 이미지 동시 생성)
+
+파이프라인 실행 순서
+  [Step 1] extract_minority_crops → crops_minority/ + crop_meta.csv 생성
+  [Step 2] run_copy_paste         → train_augmented_final.json + 합성 이미지 생성
 """
 
 import os
@@ -59,17 +65,126 @@ def blend_image(bg_crop, sticker):
     return cv2.addWeighted(bg_crop, 0.2, sticker, 0.8, 0)
 
 
+def extract_minority_crops(base_dir, threshold=50):
+    """
+    train_raw.json에서 소수 클래스(threshold 미만) 알약 객체를 Crop하여
+    crops_minority/ 폴더에 저장하고 crop_meta.csv를 생성합니다.
+
+    run_copy_paste() 실행 전에 반드시 먼저 호출해야 합니다.
+
+    Args:
+        base_dir  : train_raw.json이 있는 데이터 루트 경로
+        threshold : 소수 클래스 기준 (기본 50개 미만)
+
+    출력:
+        base_dir/crops_minority/          : 클래스별 스티커 이미지
+        base_dir/crops_minority/crop_meta.csv : 스티커 메타데이터
+
+    Example:
+        from src.preprocessing.augmentation import extract_minority_crops
+        extract_minority_crops(base_dir=BASE_DIR)
+    """
+    json_path     = os.path.join(base_dir, 'train_raw.json')
+    crop_save_dir = os.path.join(base_dir, 'crops_minority')
+    os.makedirs(crop_save_dir, exist_ok=True)
+
+    if not os.path.exists(json_path):
+        raise FileNotFoundError(f"🚨 train_raw.json 없음: {json_path}\n"
+                                f"   run_stratified_split() 을 먼저 실행하세요.")
+
+    print(f"\n{'='*60}")
+    print(f"[Step 1-B] 소수 클래스 스티커 추출 (기준: {threshold}개 미만)")
+    print(f"{'='*60}")
+
+    with open(json_path, 'r', encoding='utf-8') as f:
+        coco_data = json.load(f)
+
+    images_df      = pd.DataFrame(coco_data['images'])
+    annotations_df = pd.DataFrame(coco_data['annotations'])
+    categories_df  = pd.DataFrame(coco_data['categories'])
+
+    cat_dict = dict(zip(categories_df['id'], categories_df['name']))
+    annotations_df['class_name'] = annotations_df['category_id'].map(cat_dict)
+
+    class_counts     = annotations_df['class_name'].value_counts()
+    minority_classes = class_counts[class_counts < threshold].index.tolist()
+    print(f"🎯 증강 대상 소수 클래스: {len(minority_classes)}종")
+
+    # 파일 경로 인덱싱 (O(1) 탐색)
+    all_files = (glob.glob(os.path.join(base_dir, '**', '*.png'), recursive=True) +
+                 glob.glob(os.path.join(base_dir, '**', '*.jpg'), recursive=True) +
+                 glob.glob(os.path.join(base_dir, '**', '*.JPG'), recursive=True))
+    path_map = {os.path.basename(f): f for f in all_files}
+
+    crop_metadata = []
+    PAD = 2  # 경계 자연스럽게 처리를 위한 여유 패딩
+
+    for cls_name in tqdm(minority_classes, desc='스티커 추출'):
+        safe_cls_name = str(cls_name).replace('/', '_').replace(' ', '_').replace(':', '_')
+        cls_dir = os.path.join(crop_save_dir, safe_cls_name)
+        os.makedirs(cls_dir, exist_ok=True)
+
+        cls_annos = annotations_df[annotations_df['class_name'] == cls_name]
+
+        for _, anno in cls_annos.iterrows():
+            img_info = images_df[images_df['id'] == anno['image_id']]
+            if img_info.empty:
+                continue
+            f_name = os.path.basename(img_info.iloc[0]['file_name'])
+
+            if f_name not in path_map:
+                continue
+
+            img_array = np.fromfile(path_map[f_name], np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            if img is None:
+                continue
+
+            x, y, w, h = map(int, anno['bbox'])
+            img_h, img_w = img.shape[:2]
+            x1, y1 = max(0, x - PAD), max(0, y - PAD)
+            x2, y2 = min(img_w, x + w + PAD), min(img_h, y + h + PAD)
+
+            crop_img = img[y1:y2, x1:x2]
+            if crop_img.size == 0:
+                continue
+
+            save_name = f"{safe_cls_name}_{anno['id']}.png"
+            save_path = os.path.join(cls_dir, save_name)
+            result, encoded = cv2.imencode('.png', crop_img)
+            if result:
+                with open(save_path, mode='w+b') as f:
+                    encoded.tofile(f)
+
+            crop_metadata.append({
+                'class_name':  cls_name,
+                'category_id': anno['category_id'],
+                'crop_path':   save_path,
+                'width':       x2 - x1,
+                'height':      y2 - y1,
+            })
+
+    if crop_metadata:
+        meta_df       = pd.DataFrame(crop_metadata)
+        meta_save_path = os.path.join(crop_save_dir, 'crop_meta.csv')
+        meta_df.to_csv(meta_save_path, index=False, encoding='utf-8-sig')
+        print(f"✅ 스티커 추출 완료: {len(crop_metadata):,}개")
+        print(f"   저장 경로: {crop_save_dir}")
+    else:
+        print("⚠️  추출된 스티커가 없습니다. 경로 및 데이터를 확인해주세요.")
+
+
 def run_copy_paste(base_dir, aug_count=500, random_seed=42):
     """
     Copy-Paste 증강을 실행하여 새로운 합성 이미지와 COCO JSON을 생성합니다.
 
     사전 조건:
-      - base_dir/train_raw.json        : NB02에서 분할된 Train 데이터
-      - base_dir/crops_minority/       : NB02에서 추출된 소수 클래스 스티커
-      - base_dir/crops_minority/crop_meta.csv : 스티커 메타데이터
+      - base_dir/train_raw.json              : Stratified Split 결과
+      - base_dir/crops_minority/             : extract_minority_crops() 결과
+      - base_dir/crops_minority/crop_meta.csv: 스티커 메타데이터
 
     출력:
-      - base_dir/train_augmented_images/ : 합성 이미지
+      - base_dir/train_augmented_images/    : 합성 이미지
       - base_dir/train_augmented_final.json : 증강된 COCO JSON
 
     Args:
@@ -87,26 +202,28 @@ def run_copy_paste(base_dir, aug_count=500, random_seed=42):
     os.makedirs(aug_img_dir, exist_ok=True)
 
     if not os.path.exists(meta_path):
-        raise FileNotFoundError(f"스티커 메타데이터를 찾을 수 없습니다: {meta_path}")
+        raise FileNotFoundError(
+            f"스티커 메타데이터를 찾을 수 없습니다: {meta_path}\n"
+            f"extract_minority_crops() 를 먼저 실행하세요."
+        )
 
     with open(train_json_path, 'r', encoding='utf-8') as f:
         coco_data = json.load(f)
 
-    aug_coco   = copy.deepcopy(coco_data)
-    crop_meta  = pd.read_csv(meta_path)
+    aug_coco  = copy.deepcopy(coco_data)
+    crop_meta = pd.read_csv(meta_path)
 
     # 파일 경로 해시맵 (O(1) 탐색)
-    all_files = (glob.glob(os.path.join(base_dir, "**", "*.png"), recursive=True) +
-                 glob.glob(os.path.join(base_dir, "**", "*.jpg"), recursive=True) +
-                 glob.glob(os.path.join(base_dir, "**", "*.JPG"), recursive=True))
+    all_files = (glob.glob(os.path.join(base_dir, '**', '*.png'), recursive=True) +
+                 glob.glob(os.path.join(base_dir, '**', '*.jpg'), recursive=True) +
+                 glob.glob(os.path.join(base_dir, '**', '*.JPG'), recursive=True))
     path_map = {os.path.basename(f): f for f in all_files}
 
     max_img_id  = max((img['id']  for img in aug_coco['images']),      default=0)
     max_anno_id = max((ann['id']  for ann in aug_coco['annotations']), default=0)
-
     bg_candidates = list(coco_data['images'])
 
-    for _ in tqdm(range(aug_count), desc="Copy-Paste 증강"):
+    for _ in tqdm(range(aug_count), desc='Copy-Paste 증강'):
         bg_info = random.choice(bg_candidates)
         f_name  = os.path.basename(bg_info['file_name'])
         if f_name not in path_map:
@@ -121,19 +238,18 @@ def run_copy_paste(base_dir, aug_count=500, random_seed=42):
         existing_boxes = [ann['bbox'] for ann in aug_coco['annotations']
                           if ann['image_id'] == bg_info['id']]
 
-        num_pastes   = random.randint(1, 4)
-        pastes       = crop_meta.sample(num_pastes, replace=True)
-        new_anns     = []
-        success      = False
+        num_pastes = random.randint(1, 4)
+        pastes     = crop_meta.sample(num_pastes, replace=True)
+        new_anns   = []
+        success    = False
 
         for _, row in pastes.iterrows():
-            cw, ch = int(row['width']), int(row['height'])
+            cw, ch   = int(row['width']), int(row['height'])
             crop_arr = np.fromfile(row['crop_path'], np.uint8)
             crop_img = cv2.imdecode(crop_arr, cv2.IMREAD_COLOR)
             if crop_img is None:
                 continue
 
-            # 빈 자리 탐색 (최대 50회 시도)
             safe_x = safe_y = -1
             for _ in range(50):
                 max_x = max(11, bg_w - cw - 10)
@@ -152,19 +268,19 @@ def run_copy_paste(base_dir, aug_count=500, random_seed=42):
 
                 max_anno_id += 1
                 new_anns.append({
-                    "id":          max_anno_id,
-                    "image_id":    max_img_id + 1,
-                    "category_id": int(row['category_id']),
-                    "bbox":        [safe_x, safe_y, cw, ch],
-                    "area":        float(cw * ch),
-                    "iscrowd":     0,
-                    "segmentation": []
+                    'id':           max_anno_id,
+                    'image_id':     max_img_id + 1,
+                    'category_id':  int(row['category_id']),
+                    'bbox':         [safe_x, safe_y, cw, ch],
+                    'area':         float(cw * ch),
+                    'iscrowd':      0,
+                    'segmentation': [],
                 })
                 success = True
 
         if success:
             max_img_id  += 1
-            new_filename = f"aug_cp_{max_img_id:06d}.jpg"
+            new_filename = f'aug_cp_{max_img_id:06d}.jpg'
             save_path    = os.path.join(aug_img_dir, new_filename)
 
             result, encoded = cv2.imencode('.jpg', bg_img)
@@ -173,20 +289,18 @@ def run_copy_paste(base_dir, aug_count=500, random_seed=42):
                     encoded.tofile(f)
 
             aug_coco['images'].append({
-                "id": max_img_id, "file_name": new_filename,
-                "width": bg_w,   "height": bg_h
+                'id': max_img_id, 'file_name': new_filename,
+                'width': bg_w,    'height': bg_h,
             })
 
-            # 원본 이미지의 기존 annotation 복사
             for ann in aug_coco['annotations']:
                 if ann['image_id'] == bg_info['id']:
                     max_anno_id += 1
-                    cloned = copy.deepcopy(ann)
+                    cloned             = copy.deepcopy(ann)
                     cloned['id']       = max_anno_id
                     cloned['image_id'] = max_img_id
                     aug_coco['annotations'].append(cloned)
 
-            # 새로 붙인 스티커 annotation 추가
             aug_coco['annotations'].extend(new_anns)
 
     with open(aug_json_path, 'w', encoding='utf-8') as f:
