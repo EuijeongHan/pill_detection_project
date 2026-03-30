@@ -1,15 +1,20 @@
-# 💊 Pill Detection Project  
+#  Pill Detection Project  
 AI 8기 2팀 — 알약 객체 탐지 & 정보 제공 서비스
 
 <br>
 
-## 🏆 협업 일지
+## 협업 일지
 
 모두 같은 노션페이지에 작성하였습니다.
-- 링크 연결하기
+- [링크](https://www.notion.so/32506b12e06280dea5fdf832300228b5?v=32506b12e06280998ab9000c52ef2023)
 <br>
 
-## 📌 프로젝트 소개
+## 최종 보고서
+
+- 파일 첨부하기
+<br>
+
+## 프로젝트 소개
 헬스잇의 AI 엔지니어링 팀은 유저가 본인의 모바일 애플리케이션으로 자신이 복용중인 약 사진을 찍었을 때, 
 
 이미지 인식을 통해 해당 약에 대한 정보를 확인할 수 있는 모델을 만들어야하는 미션
@@ -18,7 +23,7 @@ AI 8기 2팀 — 알약 객체 탐지 & 정보 제공 서비스
 - 평가 지표 | Kaggle mAP@0.75:0.95 
 <br>
 
-## 👥 팀 구성 및 역할
+## 팀 구성 및 역할
 
 | 역할 | 담당자 | 핵심 업무 |
 |------|--------|-----------|
@@ -30,7 +35,7 @@ AI 8기 2팀 — 알약 객체 탐지 & 정보 제공 서비스
 
 <br>
 
-## 🎯 주요 기능
+## 주요 기능
 
 - Object Detection(Faster R-CNN / RetinaNet / YOLO) 모델 성능 극대화를 위한 데이터 전처리 및 증강 파이프라인
 
@@ -47,19 +52,16 @@ Gemini의 응답
 
 ---
 
-## ⚙️ 실행 방법
+## 실행 방법
 
->
-
-
-### 📦 1. 프로젝트 다운로드
+### 1. 프로젝트 다운로드
 
 ```bash
 git clone https://github.com/wina0901/pill_detection_project.git
 cd PILL_DETECTION_PROJECT
 ```
 
-### 📁 2. 필수 파일 추가
+### 2. 필수 파일 추가
 
 ```
 data/
@@ -70,15 +72,19 @@ models/yolo/
 ├─ yolov8s_v2_v3_ft_uf_lr_0p0003_best.pt
 └─ yolo11m_v2_v3_ft_uf_lr_0p0005_best.pt
 ```
+(필수 파일은 아래 구글드라이브에서 전달.zip을 받으시면 됩니다!)
+
+[구글 드라이브 링크](https://drive.google.com/drive/folders/1ED5sme7FjaaUazkk6336glpzjrV-bVGY)
+
 ---
 
-## 💻 Windows 실행
+## Windows 실행
 
 ```
 start_for_windows.bat
 ```
 
-## 🍎 macOS 실행
+## macOS 실행
 
 ### 최초 1회
 ```bash
@@ -92,7 +98,7 @@ chmod +x start_for_mac.command
 ---
 
 
-## 📁 프로젝트 구조
+## 프로젝트 구조
 
 ```text
 PILL_DETECTION_PROJECT/
